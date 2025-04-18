@@ -4,7 +4,7 @@ A powerful Discord selfbot for streaming videos and live content to Discord voic
 
 ## This is certainly not anywhere near done
 
-## Features
+## Features / Goals
 
 - **Stream videos** directly to Discord voice channels
 - **Database integration** for tracking multiple channels across servers
