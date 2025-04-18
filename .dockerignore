@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Environment
+.env
+venv/
+env/
+ENV/
+
+# Media files
+videos/*
+tmp/*
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Other
+.DS_Store
+.idea/
+.vscode/

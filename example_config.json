@@ -1,0 +1,21 @@
+{
+    "token": "",
+    "prefix": "$",
+    "guild_id": "",
+    "command_channel_id": "",
+    "video_channel_id": "",
+    "videos_dir": "/app/videos",
+    "db_path": "/app/streambot.db",
+    "ffmpeg_path": "ffmpeg",
+    "preview_cache_dir": "/app/tmp/preview-cache",
+    "stream_respect_video_params": false,
+    "stream_width": 1280,
+    "stream_height": 720,
+    "stream_fps": 30,
+    "stream_bitrate_kbps": 2000,
+    "stream_max_bitrate_kbps": 2500,
+    "stream_h26x_preset": "ultrafast",
+    "hw_accel_enabled": true,
+    "transcode_enabled": false
+  }
+  

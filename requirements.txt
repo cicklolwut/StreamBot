@@ -1,0 +1,5 @@
+discord.py-self==2.0.0
+aiohttp==3.8.4
+pillow==9.5.0
+pycryptodomex==3.17.0
+python-dotenv==1.0.0
