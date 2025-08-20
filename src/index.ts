@@ -1,4 +1,4 @@
-import { Client, TextChannel, CustomStatus, Message, MessageAttachment, ActivityOptions } from "discord.js-selfbot-v13";
+import { Client, TextChannel, CustomStatus, Message, MessageAttachment, ActivityOptions, MessageEmbed } from "discord.js-selfbot-v13";
 import { Streamer, Utils, prepareStream, playStream } from "@dank074/discord-video-stream";
 import config from "./config.js";
 import fs from 'fs';
@@ -9,6 +9,7 @@ import { getVideoParams, ffmpegScreenshot } from "./utils/ffmpeg.js";
 import logger from './utils/logger.js';
 import { downloadExecutable, downloadToTempFile, checkForUpdatesAndUpdate } from './utils/yt-dlp.js';
 import { Youtube } from './utils/youtube.js';
+import { JellyfinAPIClient } from './utils/jellyfinAPI.js';
 import { TwitchStream } from './@types/index.js';
 
 // Download yt-dlp and check for updates
@@ -29,6 +30,27 @@ let controller: AbortController;
 
 // Create a new instance of Youtube
 const youtube = new Youtube();
+
+// Create Jellyfin API client if enabled
+let jellyfinAPIClient: JellyfinAPIClient | null = null;
+if (config.jellyfin_enabled) {
+    jellyfinAPIClient = new JellyfinAPIClient({
+        apiUrl: config.jellyfin_bot_api_url,
+        apiSecret: config.jellyfin_bot_api_secret,
+        enabled: config.jellyfin_enabled
+    });
+
+    // Test API connection on startup
+    jellyfinAPIClient.isAvailable().then(available => {
+        if (available) {
+            logger.info('Jellyfin Discord bot API is available');
+        } else {
+            logger.warn('Jellyfin Discord bot API is not available - commands will show fallback messages');
+        }
+    }).catch(error => {
+        logger.error('Error testing Jellyfin API connection:', error);
+    });
+}
 
 const streamOpts = {
     width: config.width,
@@ -390,6 +412,378 @@ streamer.client.on('messageCreate', async (message) => {
                     }
                 }
                 break;
+            case 'jfsearch':
+                {
+                    if (!jellyfinAPIClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled');
+                        return;
+                    }
+
+                    const query = args.length > 1 ? args.slice(1).join(' ') : args[0] || '';
+
+                    if (!query) {
+                        await sendError(message, 'Please provide a search term');
+                        return;
+                    }
+
+                    try {
+                        await message.react('🔍');
+                        
+                        const success = await jellyfinAPIClient.searchItems(query, message.channel.id, config.prefix);
+                        
+                        if (!success) {
+                            const available = await jellyfinAPIClient.isAvailable();
+                            if (!available) {
+                                await sendError(message, 'Jellyfin Discord bot is not available. Please ensure it is running and configured correctly.');
+                            } else {
+                                await sendError(message, 'Failed to search Jellyfin library');
+                            }
+                        }
+                        // If successful, the Jellyfin bot will send rich embeds directly to the channel
+
+                    } catch (error) {
+                        logger.error('Jellyfin search request failed:', error);
+                        await sendError(message, 'Failed to send search request to Jellyfin bot');
+                    }
+                }
+                break;
+            case 'jfplay':
+                {
+                    if (!jellyfinAPIClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled');
+                        return;
+                    }
+
+                    if (streamStatus.joined) {
+                        sendError(message, 'Already joined');
+                        return;
+                    }
+
+                    const itemId = args.shift();
+                    if (!itemId) {
+                        await sendError(message, 'Please provide a Jellyfin item ID');
+                        return;
+                    }
+
+                    try {
+                        const streamInfo = await jellyfinAPIClient.getStreamInfo(itemId);
+                        if (!streamInfo) {
+                            await sendError(message, 'Failed to get stream information for this item');
+                            return;
+                        }
+
+                        const item = await jellyfinAPIClient.getItem(itemId);
+                        const displayName = item ? jellyfinAPIClient.getDisplayName(item) : `Jellyfin Item ${itemId}`;
+                        
+                        logger.info(`Playing Jellyfin item: ${displayName} (${streamInfo.isLocal ? 'local' : 'stream'})`);
+                        
+                        await sendPlaying(message, displayName);
+                        playVideo(message, streamInfo.streamUrl, displayName);
+
+                    } catch (error) {
+                        logger.error(`Failed to play Jellyfin item ${itemId}:`, error);
+                        await sendError(message, `Failed to play item: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+                break;
+            case 'jfrecent':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    try {
+                        await message.react('📅');
+                        
+                        const recentResult = await jellyfinClient.getRecentItems();
+                        
+                        if (recentResult.Items.length === 0) {
+                            await sendError(message, 'No recent items found');
+                            return;
+                        }
+
+                        const resultsList = recentResult.Items.slice(0, 10).map((item, index) =>
+                            jellyfinClient!.formatItemForDisplay(item, index, true)
+                        );
+
+                        await sendList(message, [
+                            '📅 **Recent Items**',
+                            '',
+                            ...resultsList,
+                            '',
+                            `💡 Use \`${config.prefix}jfplay <item-id>\` to play an item`
+                        ], "jellyfin-recent");
+
+                    } catch (error) {
+                        logger.error('Failed to get recent Jellyfin items:', error);
+                        await sendError(message, 'Failed to get recent items from Jellyfin');
+                    }
+                }
+                break;
+            case 'jflibs':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    try {
+                        await message.react('📚');
+                        
+                        const libraries = await jellyfinClient.getLibraries();
+                        
+                        if (libraries.length === 0) {
+                            await sendError(message, 'No libraries found');
+                            return;
+                        }
+
+                        const librariesList = libraries.map((lib, index) =>
+                            `${index + 1}. \`${lib.Name}\` (ID: \`${lib.Id}\`)`
+                        );
+
+                        await sendList(message, [
+                            '📚 **Available Libraries**',
+                            '',
+                            ...librariesList
+                        ], "jellyfin-libraries");
+
+                    } catch (error) {
+                        logger.error('Failed to get Jellyfin libraries:', error);
+                        await sendError(message, 'Failed to get libraries from Jellyfin');
+                    }
+                }
+                break;
+            case 'jfinfo':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    const itemId = args.shift();
+                    if (!itemId) {
+                        await sendError(message, 'Please provide a Jellyfin item ID');
+                        return;
+                    }
+
+                    try {
+                        const item = await jellyfinClient.getItemById(itemId);
+                        const details = jellyfinClient.formatItemDetails(item);
+
+                        await message.react('ℹ️');
+                        await message.reply(details.join('\n'));
+
+                    } catch (error) {
+                        logger.error(`Failed to get Jellyfin item info for ${itemId}:`, error);
+                        await sendError(message, `Failed to get item info: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+                break;
+            case 'jfshows':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    const query = args.length > 1 ? args.slice(1).join(' ') : args[0] || '';
+
+                    if (!query) {
+                        await sendError(message, 'Please provide a search term for TV shows');
+                        return;
+                    }
+
+                    try {
+                        await message.react('📺');
+                        
+                        const searchResult = await jellyfinClient.searchShows(query);
+                        
+                        if (searchResult.Items.length === 0) {
+                            await sendError(message, `No TV shows found for "${query}"`);
+                            return;
+                        }
+
+                        // Send header
+                        await sendList(message, [
+                            `📺 **TV Shows for "${query}"** (${searchResult.TotalRecordCount} total)`,
+                            '',
+                            `💡 Use \`${config.prefix}jfseasons <series-id>\` to see seasons`,
+                            `📖 Use \`${config.prefix}jfinfo <series-id>\` for show details`,
+                            `🎭 Shows with posters and descriptions below:`
+                        ], "jellyfin-shows-header");
+
+                        // Send each show with embed (poster + description)
+                        for (let i = 0; i < Math.min(searchResult.Items.length, 8); i++) {
+                            const show = searchResult.Items[i];
+                            const showData = jellyfinClient!.createSeriesEmbed(show, i);
+                            
+                            try {
+                                if (showData.embed) {
+                                    await message.channel.send({
+                                        content: showData.content,
+                                        embeds: [showData.embed]
+                                    });
+                                } else {
+                                    await message.channel.send(showData.content);
+                                }
+                                
+                                // Rate limiting between show messages
+                                if (i < Math.min(searchResult.Items.length, 8) - 1) {
+                                    await new Promise(resolve => setTimeout(resolve, 700));
+                                }
+                            } catch (error) {
+                                logger.error(`Failed to send show embed for ${show.Name}:`, error);
+                                // Fallback to text-only message
+                                await message.channel.send(showData.content);
+                            }
+                        }
+
+                        // If more than 8 shows, show remaining as text list
+                        if (searchResult.Items.length > 8) {
+                            const remainingShows = searchResult.Items.slice(8);
+                            const remainingList = remainingShows.map((item, index) =>
+                                jellyfinClient!.formatSeriesForDisplay(item, index + 8)
+                            );
+                            
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            await sendList(message, [
+                                `📋 **Additional Shows** (${remainingShows.length} more):`,
+                                '',
+                                ...remainingList.slice(0, 12)
+                            ], "jellyfin-shows-remaining");
+                        }
+
+                    } catch (error) {
+                        logger.error('Jellyfin TV show search failed:', error);
+                        await sendError(message, 'Failed to search TV shows in Jellyfin library');
+                    }
+                }
+                break;
+            case 'jfseasons':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    const seriesId = args.shift();
+                    if (!seriesId) {
+                        await sendError(message, 'Please provide a series ID');
+                        return;
+                    }
+
+                    try {
+                        await message.react('📅');
+                        
+                        // Get series info first
+                        const seriesInfo = await jellyfinClient.getItemById(seriesId);
+                        const seasonsResult = await jellyfinClient.getSeasons(seriesId);
+                        
+                        if (seasonsResult.Items.length === 0) {
+                            await sendError(message, `No seasons found for this series`);
+                            return;
+                        }
+
+                        const seasonsList = seasonsResult.Items.map((item, index) =>
+                            jellyfinClient!.formatSeasonForDisplay(item, index)
+                        );
+
+                        await sendList(message, [
+                            `📅 **Seasons for "${seriesInfo.Name}"**`,
+                            '',
+                            ...seasonsList,
+                            '',
+                            `💡 Use \`${config.prefix}jfepisodes <season-id>\` to see episodes`
+                        ], "jellyfin-seasons");
+
+                    } catch (error) {
+                        logger.error(`Failed to get seasons for series ${seriesId}:`, error);
+                        await sendError(message, `Failed to get seasons: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+                break;
+            case 'jfepisodes':
+                {
+                    if (!jellyfinClient) {
+                        await sendError(message, 'Jellyfin integration is not enabled or not connected');
+                        return;
+                    }
+
+                    const seasonId = args.shift();
+                    if (!seasonId) {
+                        await sendError(message, 'Please provide a season ID');
+                        return;
+                    }
+
+                    try {
+                        await message.react('🎬');
+                        
+                        // Get season info first
+                        const seasonInfo = await jellyfinClient.getItemById(seasonId);
+                        const episodesResult = await jellyfinClient.getEpisodes(seasonId);
+                        
+                        if (episodesResult.Items.length === 0) {
+                            await sendError(message, `No episodes found for this season`);
+                            return;
+                        }
+
+                        // Send header message first
+                        await sendList(message, [
+                            `🎬 **Episodes in "${seasonInfo.Name}"** (${episodesResult.TotalRecordCount} episodes)`,
+                            '',
+                            `💡 Use \`${config.prefix}jfplay <episode-id>\` to play an episode`,
+                            `📺 Episodes with thumbnails and synopses below:`
+                        ], "jellyfin-episodes-header");
+
+                        // Send each episode with embed (thumbnail + synopsis)
+                        for (let i = 0; i < Math.min(episodesResult.Items.length, 10); i++) {
+                            const episode = episodesResult.Items[i];
+                            const episodeData = jellyfinClient!.createEpisodeEmbed(episode, i);
+                            
+                            try {
+                                if (episodeData.embed) {
+                                    await message.channel.send({
+                                        content: episodeData.content,
+                                        embeds: [episodeData.embed]
+                                    });
+                                } else {
+                                    await message.channel.send(episodeData.content);
+                                }
+                                
+                                // Rate limiting - small delay between episode messages
+                                if (i < episodesResult.Items.length - 1) {
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+                                }
+                            } catch (error) {
+                                logger.error(`Failed to send episode embed for ${episode.Name}:`, error);
+                                // Fallback to text-only message
+                                await message.channel.send(episodeData.content);
+                            }
+                        }
+
+                        // If there are more than 10 episodes, show a summary of remaining ones
+                        if (episodesResult.Items.length > 10) {
+                            const remainingEpisodes = episodesResult.Items.slice(10);
+                            const remainingList = remainingEpisodes.map((item, index) =>
+                                jellyfinClient!.formatEpisodeForDisplay(item, index + 10, false)
+                            );
+                            
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            await sendList(message, [
+                                `📋 **Remaining Episodes** (${remainingEpisodes.length} more):`,
+                                '',
+                                ...remainingList.slice(0, 15), // Limit to prevent message size issues
+                                ...(remainingEpisodes.length > 15 ? ['...and more'] : [])
+                            ], "jellyfin-episodes-remaining");
+                        }
+
+                    } catch (error) {
+                        logger.error(`Failed to get episodes for season ${seasonId}:`, error);
+                        await sendError(message, `Failed to get episodes: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+                break;
             case 'help':
                 {
                     // Help text
@@ -410,6 +804,19 @@ streamer.client.on('messageCreate', async (message) => {
                         '',
                         '🔍 **Search**',
                         `\`${config.prefix}ytsearch\` - YouTube search`,
+                        ...(jellyfinClient ? [
+                            '',
+                            '🌟 **Jellyfin**',
+                            `\`${config.prefix}jfsearch <query>\` - Search Jellyfin library`,
+                            `\`${config.prefix}jfshows <query>\` - Search TV shows`,
+                            `\`${config.prefix}jfseasons <series-id>\` - List seasons`,
+                            `\`${config.prefix}jfepisodes <season-id>\` - List episodes with details`,
+                            `\`${config.prefix}jfplay <item-id>\` - Play from Jellyfin`,
+                            `\`${config.prefix}jfrecent\` - Show recent items`,
+                            `\`${config.prefix}jflibs\` - Show available libraries`,
+                            `\`${config.prefix}jfinfo <item-id>\` - Show item details`
+                        ] : []),
+                        '',
                         `\`${config.prefix}help\` - Show this help`
                     ].join('\n');
 

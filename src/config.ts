@@ -33,6 +33,17 @@ export default {
     server_username: process.env.SERVER_USERNAME ? process.env.SERVER_USERNAME : 'admin',
     server_password: bcrypt.hashSync(process.env.SERVER_PASSWORD ? process.env.SERVER_PASSWORD : 'admin', 10),
     server_port: parseInt(process.env.SERVER_PORT ? process.env.SERVER_PORT : '8080'),
+
+    // Jellyfin integration options
+    jellyfin_enabled: process.env.JELLYFIN_ENABLED ? parseBoolean(process.env.JELLYFIN_ENABLED) : false,
+    jellyfin_baseUrl: process.env.JELLYFIN_BASE_URL || 'http://localhost:8096',
+    jellyfin_apiKey: process.env.JELLYFIN_API_KEY || '',
+    jellyfin_userId: process.env.JELLYFIN_USER_ID || '',
+    jellyfin_libraryId: process.env.JELLYFIN_LIBRARY_ID || '',
+
+    // Jellyfin Discord Bot API options
+    jellyfin_bot_api_url: process.env.JELLYFIN_BOT_API_URL || 'http://localhost:3001',
+    jellyfin_bot_api_secret: process.env.JELLYFIN_BOT_API_SECRET || 'your-secret-key',
 }
 
 function parseVideoCodec(value: string): "VP8" | "H264" | "H265" {
